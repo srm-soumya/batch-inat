@@ -1,0 +1,37 @@
+{
+    "properties": {
+        "nodeCount": 1,
+        "cntkSettings": {
+            "pythonScriptFilePath": "$AZ_BATCHAI_INPUT_SCRIPT/02_model.py",
+            "commandLineArgs": "--preprocess -d $AZ_BATCHAI_INPUT_DATA -dd $AZ_BATCHAI_OUTPUT_OUT",
+            "process_count": 1
+        },
+        "stdOutErrPathPrefix": "$AZ_BATCHAI_MOUNT_ROOT/afs",
+        "inputDirectories": [
+            {
+                "id": "SCRIPT",
+                "path": "$AZ_BATCHAI_MOUNT_ROOT/afs/inatdir/scripts"
+            },
+            {
+                "id": "MODEL",
+                "path": "$AZ_BATCHAI_MOUNT_ROOT/afs/inatdir/model"
+            },
+            {
+                "id": "DATA",
+                "path": "$AZ_BATCHAI_MOUNT_ROOT/nfs"
+            }
+        ],
+        "outputDirectories": [
+            {
+                "id": "OUT",
+                "pathPrefix": "$AZ_BATCHAI_MOUNT_ROOT/afs/inatdir/output",
+                "pathSuffix": "Metadata"
+            }
+        ],
+        "containerSettings": {
+            "imageSourceRegistry": {
+                "image": "microsoft/cntk:2.1-gpu-python3.5-cuda8.0-cudnn6.0"
+            }
+        }
+    }
+}

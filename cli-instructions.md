@@ -33,7 +33,7 @@ az storage directory create --name <dir-name> --share-name <share-name> --accoun
 ```
 
 3. Upload your model, metadata, scripts and output to the azure file share.
-You can get all this from the github repo []
+You can get all this from the github repo [https://github.com/srm-soumya/batch-inat]
 Go to portal.azure.com, under your storage account check for Access keys. There will be 2 keys, use any of it.
 ```sh
 azcopy --source scripts --destination https://<storage-name>.file.core.windows.net/<share-name>/<dir-name>/scripts --dest-key <destination-key> --recursive
@@ -133,7 +133,7 @@ Second job
 az batchai job create -l eastus -g <group-name> -n <job-name> -r <cluster-name> -c job2.json
 ```
 
-You can find the job files in the github repo []
+You can find the job files in the github repo [https://github.com/srm-soumya/batch-inat]
 
 
 

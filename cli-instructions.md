@@ -115,7 +115,7 @@ We will create a 2 node NC12 UbuntuDSVM in this example. ```min``` and ```max```
 az batchai cluster create -l eastus -g <group-name> -n <cluster-name> --storage-account-name <storage-name> --nfs <nfs-name> --nfs-mount-path nfs --afs-name <share-name> --afs-mount-path afs -s Standard_NC12 -i UbuntuDSVM --min 2 --max 2 -u <user-name> -p <password>
 ```
 
-#### Check your cluster status
+### Check your cluster status
 ```sh
 az batchai cluster list -o table
 ```
@@ -127,7 +127,7 @@ We need to run two jobs in our cluster.
 - First job to create the required map files and store it in our ```metadata``` directory.
 - Second job to run our model in the clusters. It will train the model and store it in the ```model``` directory and it will store all the outputs in the ```output``` directory.
 
-** First job **
+#### First job
 
 1. Create a ```job1.json``` file for creating the first job.
 ```json
@@ -200,7 +200,7 @@ azcopy --source metadata --destination https://<storage-name>.file.core.windows.
 az batchai job delete -n <job-name>
 ```
 
-** Second job **
+#### Second job
 
 1. Create a ```job2.json``` file for creating the second job.
 ```json

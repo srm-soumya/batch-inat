@@ -37,7 +37,7 @@ TRAINDIR = os.path.join(DATADIR, 'train')      # TRAINDIR - path to the training
 TESTDIR = os.path.join(DATADIR, 'test')        # TESTDIR - path to the test directory
 NUMEPOCHS = args.num_epochs                    # NUMEPOCHS - number of epochs you wish to train your model
 
-model_name = 'resnet34-inat.model'
+model_name = 'resnet18-inat.model'
 
 # id2label, label2id are mappers for label-index
 id2label = dict()

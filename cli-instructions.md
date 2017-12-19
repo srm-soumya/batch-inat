@@ -19,6 +19,11 @@ We will be using this storage account to host our model, metadata, scripts and o
 az storage account create -n <storage-name> --sku Standard_LRS -l eastus -g <group-name>
 ```
 
+### Clone the sample git repository for this project
+```sh
+git clone https://github.com/srm-soumya/batch-inat
+```
+
 ### Prepare azure file share (afs)
 
 1. Create an azure file share.
@@ -32,13 +37,12 @@ az storage share create --name <share-name> --account-name <storage-name>
 az storage directory create --name <dir-name> --share-name <share-name> --account-name <storage-name>
 ```
 
-3. Upload your model, metadata, scripts and output to the azure file share.
-You can get all this from the github repo [https://github.com/srm-soumya/batch-inat]
+3. Upload your model, scripts and output to the azure file share.
+You can find all the required files under the repository you cloned.(Make sure to delete the files inside the metadata folder, so that you can later create your own map files there)
 Go to portal.azure.com, under your storage account check for Access keys. There will be 2 keys, use any of it.
 ```sh
 azcopy --source scripts --destination https://<storage-name>.file.core.windows.net/<share-name>/<dir-name>/scripts --dest-key <destination-key> --recursive
 azcopy --source model --destination https://<storage-name>.file.core.windows.net/<share-name>/<dir-name>/model --dest-key <destination-key> --recursive
-azcopy --source metadata --destination https://<storage-name>.file.core.windows.net/<share-name>/<dir-name>/metadata --dest-key <destination-key> --recursive
 azcopy --source output --destination https://<storage-name>.file.core.windows.net/<share-name>/<dir-name>/output --dest-key <destination-key> --recursive
 ```
 
@@ -123,17 +127,172 @@ We need to run two jobs in our cluster.
 - First job to create the required map files and store it in our ```metadata``` directory.
 - Second job to run our model in the clusters. It will train the model and store it in the ```model``` directory and it will store all the outputs in the ```output``` directory.
 
-First job
+** First job **
+
+1. Create a ```job1.json``` file for creating the first job.
+```json
+{
+    "properties": {
+        "nodeCount": 1,
+        "cntkSettings": {
+            "pythonScriptFilePath": "$AZ_BATCHAI_INPUT_SCRIPT/02_model.py",
+            "commandLineArgs": "--preprocess -d $AZ_BATCHAI_INPUT_DATA -dd $AZ_BATCHAI_OUTPUT_OUT",
+            "process_count": 1
+        },
+        "stdOutErrPathPrefix": "$AZ_BATCHAI_MOUNT_ROOT/afs",
+        "inputDirectories": [
+            {
+                "id": "SCRIPT",
+                "path": "$AZ_BATCHAI_MOUNT_ROOT/afs/inatdir/scripts"
+            },
+            {
+                "id": "MODEL",
+                "path": "$AZ_BATCHAI_MOUNT_ROOT/afs/inatdir/model"
+            },
+            {
+                "id": "DATA",
+                "path": "$AZ_BATCHAI_MOUNT_ROOT/nfs"
+            }
+        ],
+        "outputDirectories": [
+            {
+                "id": "OUT",
+                "pathPrefix": "$AZ_BATCHAI_MOUNT_ROOT/afs/inatdir/output",
+                "pathSuffix": "Metadata"
+            }
+        ],
+        "containerSettings": {
+            "imageSourceRegistry": {
+                "image": "microsoft/cntk:2.1-gpu-python3.5-cuda8.0-cudnn6.0"
+            }
+        }
+    }
+}
+```
+
+2. Create a job with <job-name> and run it on the cluster <cluster-name>.
 ```sh
 az batchai job create -l eastus -g <group-name> -n <job-name> -r <cluster-name> -c job1.json
 ```
 
-Second job
+
+3. Monitor the job <job-name> to get an overview of the job status.
+```sh
+az batchai job list -o table
+```
+
+The ```executionState``` contains the current execution state of the job:
+    - queued: the job is waiting for the cluster nodes to become available
+    - running: the job is running
+    - succeeded (or failed) : the job is completed and executionInfo contains details about the result
+
+4. When your <job-name> status is in ```succeeded``` state get the required ```map_files``` from your account in portal.azure.com which will be under ```$AZ_BATCHAI_MOUNT_ROOT/afs/inatdir/output/subscription-id/<group-name>/jobs/<job-name>/job-id/outputs/Metadata```
+
+Download the files and put it inside the ```metadata``` directory in your project folder.
+
+5. Upload the metadata repository to the azure file share.
+```sh
+azcopy --source metadata --destination https://<storage-name>.file.core.windows.net/<share-name>/<dir-name>/metadata --dest-key <destination-key> --recursive
+```
+
+6. Delete the job <job-name> once you are done with it.
+```sh
+az batchai job delete -n <job-name>
+```
+
+** Second job **
+
+1. Create a ```job2.json``` file for creating the second job.
+```json
+{
+    "properties": {
+        "nodeCount": 2,
+        "cntkSettings": {
+            "pythonScriptFilePath": "$AZ_BATCHAI_INPUT_SCRIPT/02_model.py",
+            "commandLineArgs": "--train -d $AZ_BATCHAI_INPUT_DATA -dd $AZ_BATCHAI_INPUT_METADATA -m $AZ_BATCHAI_INPUT_MODEL -o $AZ_BATCHAI_OUTPUT_OUT",
+            "processCount": 4
+        },
+        "stdOutErrPathPrefix": "$AZ_BATCHAI_MOUNT_ROOT/afs",
+        "inputDirectories": [
+            {
+                "id": "DATA",
+                "path": "$AZ_BATCHAI_MOUNT_ROOT/nfs"
+            },
+            {
+                "id": "METADATA",
+                "path": "$AZ_BATCHAI_MOUNT_ROOT/afs/inatdir/metadata"
+            },
+            {
+                "id": "SCRIPT",
+                "path": "$AZ_BATCHAI_MOUNT_ROOT/afs/inatdir/scripts"
+            },
+            {
+                "id": "MODEL",
+                "path": "$AZ_BATCHAI_MOUNT_ROOT/afs/inatdir/model"
+            }
+        ],
+        "outputDirectories": [
+            {
+                "id": "OUT",
+                "pathPrefix": "$AZ_BATCHAI_MOUNT_ROOT/afs/inatdir/output",
+                "pathSuffix": "Models"
+            }
+        ],
+        "containerSettings": {
+            "imageSourceRegistry": {
+                "image": "microsoft/cntk:2.1-gpu-python3.5-cuda8.0-cudnn6.0"
+            }
+        }
+    }
+}
+```
+
+2. Create another job with <job-name> and run it on the cluster <cluster-name>
 ```sh
 az batchai job create -l eastus -g <group-name> -n <job-name> -r <cluster-name> -c job2.json
 ```
 
-You can find the job files in the github repo [https://github.com/srm-soumya/batch-inat]
+3. Monitor the job <job-name> to get an overview of the job status.
+```sh
+az batchai job list -o table
+```
+
+4. Check the status of your nodes in the cluster.
+```sh
+az batchai cluster list-nodes -n <cluster-name> -o table
+```
+
+This will list the cluster details like IP and port number, you can ssh into them and monitor the GPU usage and perform any other task.
+
+
+5. List stdout and stderr files
+You can look into the ```stdout``` and ```stderr``` log files. To list the links to these files use:
+```sh
+az batchai job list-files --name <job-name> --output-directory-id stdouterr
+```
+This will give you the name & url of your log files.
+
+You can then stream the ```stderr``` or ```stdout``` log files using:
+```
+az batchai job stream-file --job-name <job-name> --output-directory-id stdouterr --name stderr.txt
+az batchai job stream-file --job-name <job-name> --output-directory-id stdouterr --name stdout.txt
+```
+
+6. When your <job-name> status is in ```succeeded``` state, you can get your ```trained_model```  and ```log_files``` from your training under ```$AZ_BATCHAI_MOUNT_ROOT/afs/inatdir/output/subscription-id/<group-name>/jobs/<job-name>/job-id/outputs/Models```
+
+
+### Delete resources
+Once you are done with your training, make sure to delete the jobs and clusters.
+
+1. Delete the jobs
+```sh
+az batchai job delete -n <job-name>
+```
+
+2. Delete the clusters
+```sh
+az batchai cluster delete -n <cluster-name>
+```
 
 
 

@@ -80,6 +80,7 @@ def create_map_file(directory):
     print('Before Balancing')
     print(df['id'].value_counts())
 
+    # Computes the dictionary of weights for different classes of images in the dataset
     def get_class_weights(y, smooth_factor=0.15):
         counter = Counter(y)
         if smooth_factor > 0:
@@ -91,6 +92,8 @@ def create_map_file(directory):
 
     copy = df.copy()
     d = get_class_weights(df['id'].values)
+
+    # Create copies of images based on their weights calculated, to balance the dataset
     for id, count in d.items():
         count -= 1
         if count:
@@ -127,11 +130,13 @@ def create_image_mb_source(map_file, train, total_number_of_samples):
     print('Creating source for {}.'.format(map_file))
     transforms = []
     if train:
+        # Apply translational and color transformations only for the Image set
         transforms += [
             xforms.crop(crop_type='randomarea', area_ratio=(0.08, 1.0), aspect_ratio=(0.75, 1), jitter_type='uniratio'), # train uses jitter
             xforms.color(brightness_radius=0.4, contrast_radius=0.4, saturation_radius=0.4)
         ]
 
+    # Scale the images to a specified size (224 x 224) as expected by the model
     transforms += [
         xforms.scale(width=image_width, height=image_height, channels=num_channels, interpolations='cubic')
     ]
@@ -167,13 +172,16 @@ def resnet_model(name, scaled_input):
     cloned_layers = C.combine([last_node.owner]).clone(C.CloneMethod.clone, {feature_node: C.placeholder(name='features')})
     cloned_out = cloned_layers(scaled_input)
 
+    # Add GlobalPooling followed by a dropout layer
     z = C.layers.GlobalAveragePooling()(cloned_out)
     z = C.layers.Dropout(dropout_rate=0.3, name='d1')(z)
 
+    # Add first block of dense layers
     z = C.layers.Dense(128, activation=C.ops.relu, name='fc1')(cloned_out)
     z = C.layers.BatchNormalization(map_rank=1)(z)
     z = C.layers.Dropout(dropout_rate=0.6, name='d2')(z)
 
+    # Add second block of dense layers
     z = C.layers.Dense(128, activation=C.ops.relu, name='fc2')(cloned_out)
     z = C.layers.BatchNormalization(map_rank=1)(z)
     z = C.layers.Dropout(dropout_rate=0.3, name='d2')(z)
@@ -226,14 +234,17 @@ def create_trainer(network, epoch_size, num_quantization_bits, warm_up, progress
     mm_schedule = C.momentum_schedule(0.9)
     l2_reg_weight = 0.0001
 
+    # Create the Adam learner
     learner = C.adam(network['output'].parameters,
                   lr_schedule,
                   mm_schedule,
                   l2_regularization_weight=l2_reg_weight,
                   unit_gain=False)
 
+    # Compute the number of workers
     num_workers = C.distributed.Communicator.num_workers()
     print('Number of workers: {}'.format(num_workers))
+
     if num_workers > 1:
         parameter_learner = C.train.distributed.data_parallel_distributed_learner(learner, num_quantization_bits=num_quantization_bits)
         trainer = C.Trainer(network['output'], (network['ce'], network['pe']), parameter_learner, progress_writers)
@@ -271,6 +282,8 @@ def train_model(network, trainer, train_source, test_source, validation_source, 
         callback=callback)
 
     start = time.time()
+
+    # Train the model
     training_session(
         trainer=trainer,
         mb_source=train_source,
@@ -281,6 +294,7 @@ def train_model(network, trainer, train_source, test_source, validation_source, 
         # test_config=test_config,
         cv_config=validation_config
     ).train()
+
     end = time.time()
     print('The Network took {} secs to train.'.format(end - start))
     print('Saving the model here {}.'.format(os.path.join(OUTPUTDIR, model_name)))
@@ -295,8 +309,10 @@ def run(train_data, test_data, validation_data, minibatch_size=200, epoch_size=5
     num_mbs_per_log=100, profiling=True):
     _cntk_py.set_computation_network_trace_level(0)
 
+    # Create the network to be trained
     network = create_resnet_network()
 
+    # Define the ProgessWriter
     progress_writers = [C.logging.ProgressPrinter(
         freq=num_mbs_per_log,
         tag='Training',
@@ -305,11 +321,15 @@ def run(train_data, test_data, validation_data, minibatch_size=200, epoch_size=5
         num_epochs=num_epochs,
         distributed_freq=None)]
 
+    # Create the trainer
     trainer = create_trainer(network, epoch_size, num_quantization_bits, warm_up, progress_writers)
+
+    # Create the input data sources
     train_source = create_image_mb_source(train_data, train=True, total_number_of_samples=num_epochs * epoch_size)
     test_source = create_image_mb_source(test_data, train=False, total_number_of_samples=C.io.FULL_DATA_SWEEP)
     validation_source = create_image_mb_source(validation_data, train=False, total_number_of_samples=C.io.FULL_DATA_SWEEP)
 
+    # Call the train_model function
     train_model(network, trainer, train_source, validation_source, test_source, minibatch_size, epoch_size, restore, profiling)
 
 def predict_image(model, image_path):
@@ -321,16 +341,20 @@ def predict_image(model, image_path):
     # load and format image (resize, RGB -> BGR, CHW -> HWC)
     try:
         img = Image.open(image_path)
+        # Resize the image
         resized = img.resize((image_width, image_height), Image.ANTIALIAS)
+        # RGB => BGR
         bgr_image = np.asarray(resized, dtype=np.float32)[..., [2, 1, 0]]
+        # CHW => HWC
         hwc_format = np.ascontiguousarray(np.rollaxis(bgr_image, 2))
 
         # compute model output
         arguments = {model.arguments[0]: [hwc_format]}
         output = model.eval(arguments)
 
-        # return softmax probabilities
+        # Compute Softmax function over the output
         sm = C.softmax(output[0])
+
         return sm.eval()
     except Exception as e:
         print(e)
@@ -342,8 +366,11 @@ def evaluate_model(model):
     Goes through the training and test set, computes the confusion-matrix, top_1, top_5% score
     for each class of the labels for both categories and sub-categories.
     '''
+    # train_dict and test_dict stores the top 1% and top 5% score for each class
     train_dict = {}
     test_dict = {}
+
+    # confusion_matrix stores sub-category level info, cat_confusion_matrix stores category level info
     confusion_matrix = {}
     cat_confusion_matrix = {}
 
@@ -428,13 +455,16 @@ if __name__=='__main__':
         print('\nStarting Preprocessing...\n')
         store_map_files()
 
+    # Load id2label and label2id dicts
     id2label = pickle.load(open(os.path.join(METADATADIR, 'id2label'), 'rb'))
     label2id = pickle.load(open(os.path.join(METADATADIR, 'label2id'), 'rb'))
 
+    # Count the number of images in the training set
     epoch_size = sum(1 for line in open(os.path.join(METADATADIR, 'train_map.tsv')))
     print('Number of classes: {}'.format(num_classes))
     print('Epoch size: {}'.format(epoch_size))
 
+    # Load train, test and validation data
     train_data = os.path.join(METADATADIR, 'train_map.tsv')
     test_data = os.path.join(METADATADIR, 'validation_map.tsv')
     validation_data = os.path.join(METADATADIR, 'validation_map.tsv')

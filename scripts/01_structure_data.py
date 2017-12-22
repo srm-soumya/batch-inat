@@ -65,19 +65,30 @@ def arrange_data():
             for sub_cat in os.listdir(os.path.join(data_path, cat)):
                 cat_subcat[cat].add(sub_cat)
                 folder_name = '{}-{}'.format(cat, sub_cat)
+
+                # Create directories inside train and validation folders
                 os.makedirs(os.path.join(data_path, train, folder_name))
                 os.makedirs(os.path.join(data_path, test, folder_name))
+
+                # Get the list of images
                 imgs = os.listdir(os.path.join(data_path, cat, sub_cat))
                 size = len(imgs)
+
+                # Find the point to split
                 split_point = int(split * size)
+
+                # Move images to train directory
                 for img in imgs[:split_point]:
                     src = os.path.join(data_path, cat, sub_cat, img)
                     dest = os.path.join(data_path, train, folder_name, img)
                     shutil.move(src, dest)
+
+                # Move images to validation directory
                 for img in imgs[split_point:]:
                     src = os.path.join(data_path, cat, sub_cat, img)
                     dest = os.path.join(data_path, test, folder_name, img)
                     shutil.move(src, dest)
+
             shutil.rmtree(os.path.join(data_path, cat))
 
     print('Saving the category-subcategory map in cat_subcat...')
@@ -85,6 +96,7 @@ def arrange_data():
         pickle.dump(cat_subcat, f)
 
 if __name__ == '__main__':
+    # Check if metadata exists or else create the directory
     if not os.path.exists('metadata'):
         os.makedirs('metadata')
     resize_images()

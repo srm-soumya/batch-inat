@@ -52,7 +52,9 @@ epoch_size = None
 
 def create_map_file(directory):
     '''
-    Input: name of the directory for which you need the map_file
+    Input:
+    - directory: name of the directory for which you need the map_file
+    - balance: boolean, checks if you wish to balance the weights
     Function:
     - Checks for class imbalance in the data, tries to overcome it by creating duplicate entries
       for classes with low ratio. With Image Augmentation applied on duplicated data, the class
@@ -90,17 +92,16 @@ def create_map_file(directory):
         majority = max(counter.values())
         return {cls: int(majority // count) for cls, count in counter.items()}
 
-    copy = df.copy()
-    d = get_class_weights(df['id'].values)
+    if balance:
+        copy = df.copy()
+        d = get_class_weights(df['id'].values)
+        for id, count in d.items():
+            count -= 1
+            if count:
+                subset = df[df['id'] == id]
+                copy = copy.append([subset] * count, ignore_index=True)
 
-    # Create copies of images based on their weights calculated, to balance the dataset
-    for id, count in d.items():
-        count -= 1
-        if count:
-            subset = df[df['id'] == id]
-            copy = copy.append([subset] * count, ignore_index=True)
-
-    df = copy
+        df = copy
     print('After Balancing')
     print(df['id'].value_counts())
 
@@ -113,8 +114,8 @@ def store_in_pickle(data, filename):
 
 def store_map_files():
     ''' Creates the map file for training and validation set '''
-    create_map_file('train')
-    create_map_file('validation')
+    create_map_file('train', True)
+    create_map_file('validation', False)
     store_in_pickle(label2id, 'label2id')
     store_in_pickle(id2label, 'id2label')
 
@@ -164,42 +165,46 @@ def resnet_model(name, scaled_input):
     Return: Model
     '''
     print('Loading Resnet model from {}.'.format(name))
-    base_model = C.load_model(os.path.join(MODELDIR, name))
-    feature_node = C.logging.find_by_name(base_model, 'features')
-    last_node = C.logging.find_by_name(base_model, 'z.x')
+    resnet = C.load_model(os.path.join(MODELDIR, name))
+
+    features_placeholder = C.placeholder(shape=(3, 224, 224), name='features')
+    features = C.input_variable(shape=(3, 224, 224), name='features')
+
+    feature_node = resnet.find_by_name('features')
+    last_node = resnet.find_by_name('z.x')
 
     # Clone the desired layers with fixed weights
-    cloned_layers = C.combine([last_node.owner]).clone(C.CloneMethod.clone, {feature_node: C.placeholder(name='features')})
-    cloned_out = cloned_layers(scaled_input)
+    cloned_layers = C.combine([last_node.owner]).clone(C.CloneMethod.clone, {feature_node: features_placeholder})
+    residual_layers = C.as_block(composite=cloned_layers,
+                             block_arguments_map=[(features_placeholder, features)],
+                             block_op_name='residual_layers',
+                             block_instance_name='residual_layers')
 
     # Add GlobalPooling followed by a dropout layer
-    z = C.layers.GlobalAveragePooling()(cloned_out)
-    z = C.layers.Dropout(dropout_rate=0.3, name='d1')(z)
+    z = residual_layers(scaled_input)
+    z = C.layers.GlobalAveragePooling()(z)
+    z = C.layers.Dropout(dropout_rate=0.3)(z)
 
     # Add first block of dense layers
-    z = C.layers.Dense(128, activation=C.ops.relu, name='fc1')(cloned_out)
-    z = C.layers.BatchNormalization(map_rank=1)(z)
-    z = C.layers.Dropout(dropout_rate=0.6, name='d2')(z)
+    z = C.layers.Dense(10, activation=C.ops.relu, name='fc1')(z)
+    z = C.layers.BatchNormalization(map_rank=1, name='bn1')(z)
+    z = C.layers.Dropout(dropout_rate=0.6, name='d1')(z)
 
     # Add second block of dense layers
-    z = C.layers.Dense(128, activation=C.ops.relu, name='fc2')(cloned_out)
-    z = C.layers.BatchNormalization(map_rank=1)(z)
-    z = C.layers.Dropout(dropout_rate=0.3, name='d2')(z)
+    z = C.layers.Dense(10, activation=C.ops.relu, name='fc1')(z)
+    z = C.layers.BatchNormalization(map_rank=1, name='bn1')(z)
+    z = C.layers.Dropout(dropout_rate=0.6, name='d1')(z)
 
     z = C.layers.Dense(num_classes, activation=None, name='prediction')(z)
 
-    return z
+    residual_layers = z.find_by_name('residual_layers')
+    residual_params = residual_layers.parameters
+    dense_params = set(z.parameters) - set(residual_params)
 
-# TODO: Load the trained model and unfreeze the layers
-# def load_and_unfreeze_model(name, scaled_input):
-#     print('Loading trained model from {}.'.format(os.path.join(OUTPUTDIR, name)))
-#     path = os.path.join(OUTPUTDIR, name)
-#     if not os.path.exists(path):
-#         raise FileNotFoundError('Initial model of phase 1 doesnot exist, please complete the initial steps!')
-#     model = C.load_model(path)
-#     clone = model.clone(C.CloneMethod.clone)
-#     z = clone(scaled_input)
-#     return z
+    print('Length of Residual Layers: {}'.format(len(residual_params)))
+    print('Length of Dense Layers: {}'.format(len(dense_params)))
+
+    return z, residual_params, dense_params
 
 def create_resnet_network():
     ''' Create the Resnet Network '''
@@ -210,7 +215,7 @@ def create_resnet_network():
 
     # Scale the input, by subtracting it from the mean of Imagenet dataset.
     scaled_input = feature_var - C.constant(114)
-    z = resnet_model('ResNet18_ImageNet_CNTK.model', scaled_input)
+    z, residual_params, dense_params = resnet_model('ResNet18_ImageNet_CNTK.model', scaled_input)
 
     # loss and metric
     ce = C.cross_entropy_with_softmax(z, label_var)
@@ -223,33 +228,41 @@ def create_resnet_network():
         'label': label_var,
         'ce' : ce,
         'pe' : pe,
-        'output': z
+        'output': z,
+        'residual_params': residual_params,
+        'dense_params': dense_params
     }
 
 def create_trainer(network, epoch_size, num_quantization_bits, warm_up, progress_writers):
     ''' Create Trainer '''
     print('Creating the trainer.')
     # Differential Learning rate scheduler
-    lr_schedule = C.learning_rate_schedule([0.01] * 10 + [0.001] * 20 + [0.0001] * 30, unit=C.UnitType.minibatch)
+    # lr_schedule = C.learning_rate_schedule([0.01] * 10 + [0.001] * 20 + [0.0001] * 30, unit=C.UnitType.minibatch)
     mm_schedule = C.momentum_schedule(0.9)
     l2_reg_weight = 0.0001
 
-    # Create the Adam learner
-    learner = C.adam(network['output'].parameters,
-                  lr_schedule,
-                  mm_schedule,
-                  l2_regularization_weight=l2_reg_weight,
-                  unit_gain=False)
+    # Create the Adam learners
+    learner1 = C.adam(tuple(network['residual_params']),
+                         C.learning_parameter_schedule(0.0001),
+                         mm_schedule,
+                         l2_regularization_weight=l2_reg_weight,
+                         unit_gain=False)
+
+    learner2 = C.adam(tuple(network['dense_params']),
+                         C.learning_parameter_schedule(0.01),
+                         mm_schedule,
+                         l2_regularization_weight=l2_reg_weight,
+                         unit_gain=False)
 
     # Compute the number of workers
     num_workers = C.distributed.Communicator.num_workers()
     print('Number of workers: {}'.format(num_workers))
-
     if num_workers > 1:
-        parameter_learner = C.train.distributed.data_parallel_distributed_learner(learner, num_quantization_bits=num_quantization_bits)
-        trainer = C.Trainer(network['output'], (network['ce'], network['pe']), parameter_learner, progress_writers)
+        parameter_learner1 = C.train.distributed.data_parallel_distributed_learner(learner1, num_quantization_bits=num_quantization_bits)
+        parameter_learner2 = C.train.distributed.data_parallel_distributed_learner(learner2, num_quantization_bits=num_quantization_bits)
+        trainer = C.Trainer(network['output'], (network['ce'], network['pe']), [parameter_learner1, parameter_learner2], progress_writers)
     else:
-        trainer = C.Trainer(network['output'], (network['ce'], network['pe']), learner, progress_writers)
+        trainer = C.Trainer(network['output'], (network['ce'], network['pe']), [learner1, learner2], progress_writers)
 
     return trainer
 

@@ -1,4 +1,5 @@
 import argparse
+import csv
 import glob
 import os
 import pickle
@@ -22,7 +23,7 @@ parser.add_argument('--data_dir', '-d', action='store', help='Specify the data d
 parser.add_argument('--metadata_dir', '-dd', action='store', help='Specify the metadata directory', default='metadata')
 parser.add_argument('--model_dir', '-m', action='store', help='Specify the pretrained model directory', default='model')
 parser.add_argument('--output_dir', '-o', action='store', help='Specify the model directory', default='output')
-parser.add_argument('--num_epochs', '-n', action='store', help='Number of Epochs to run', default=10, type=int)
+parser.add_argument('--num_epochs', '-n', action='store', help='Number of Epochs to run', default=15, type=int)
 
 parser.add_argument('--evaluate', action='store_true', help='Evaluate the model', default=False)
 parser.add_argument('--model', action='store', help='Model Path')
@@ -37,7 +38,7 @@ TRAINDIR = os.path.join(DATADIR, 'train')      # TRAINDIR - path to the training
 TESTDIR = os.path.join(DATADIR, 'test')        # TESTDIR - path to the test directory
 NUMEPOCHS = args.num_epochs                    # NUMEPOCHS - number of epochs you wish to train your model
 
-model_name = 'resnet18-inat.model'
+model_name = 'resnet152-inat.model'
 
 # id2label, label2id are mappers for label-index
 id2label = dict()
@@ -50,7 +51,7 @@ num_channels = 3
 num_classes  = sum(1 for i in os.listdir(os.path.join(TRAINDIR)))
 epoch_size = None
 
-def create_map_file(directory):
+def create_map_file(directory, balance=True):
     '''
     Input:
     - directory: name of the directory for which you need the map_file
@@ -114,7 +115,7 @@ def store_in_pickle(data, filename):
 
 def store_map_files():
     ''' Creates the map file for training and validation set '''
-    create_map_file('train', True)
+    create_map_file('train', False)
     create_map_file('validation', False)
     store_in_pickle(label2id, 'label2id')
     store_in_pickle(id2label, 'id2label')
@@ -165,46 +166,34 @@ def resnet_model(name, scaled_input):
     Return: Model
     '''
     print('Loading Resnet model from {}.'.format(name))
-    resnet = C.load_model(os.path.join(MODELDIR, name))
-
+    base_model = C.load_model(os.path.join(MODELDIR, name))
     features_placeholder = C.placeholder(shape=(3, 224, 224), name='features')
     features = C.input_variable(shape=(3, 224, 224), name='features')
 
-    feature_node = resnet.find_by_name('features')
-    last_node = resnet.find_by_name('z.x')
+    feature_node = C.logging.find_by_name(base_model, 'features')
+    last_node = C.logging.find_by_name(base_model, 'z.x')
+    cloned_layers = C.combine([last_node.owner]).clone(C.CloneMethod.freeze,
+                                                       {feature_node: features_placeholder})
+    retained_layers = C.as_block(composite=cloned_layers,
+                                 block_arguments_map=[(features_placeholder, features)],
+                                 block_op_name='retainedlayers',
+                                 block_instance_name='retainedlayers')
 
-    # Clone the desired layers with fixed weights
-    cloned_layers = C.combine([last_node.owner]).clone(C.CloneMethod.clone, {feature_node: features_placeholder})
-    residual_layers = C.as_block(composite=cloned_layers,
-                             block_arguments_map=[(features_placeholder, features)],
-                             block_op_name='residual_layers',
-                             block_instance_name='residual_layers')
-
-    # Add GlobalPooling followed by a dropout layer
-    z = residual_layers(scaled_input)
+    z = retained_layers(scaled_input)
     z = C.layers.GlobalAveragePooling()(z)
-    z = C.layers.Dropout(dropout_rate=0.3)(z)
+    z = C.layers.Dropout(dropout_rate=0.25, name='d1')(z)
 
-    # Add first block of dense layers
-    z = C.layers.Dense(10, activation=C.ops.relu, name='fc1')(z)
-    z = C.layers.BatchNormalization(map_rank=1, name='bn1')(z)
-    z = C.layers.Dropout(dropout_rate=0.6, name='d1')(z)
+    z = C.layers.Dense(10000, activation=C.ops.relu, name='fc1')(z)
+    z = C.layers.BatchNormalization(map_rank=1)(z)
+    z = C.layers.Dropout(dropout_rate=0.4, name='d2')(z)
 
-    # Add second block of dense layers
-    z = C.layers.Dense(10, activation=C.ops.relu, name='fc1')(z)
-    z = C.layers.BatchNormalization(map_rank=1, name='bn1')(z)
-    z = C.layers.Dropout(dropout_rate=0.6, name='d1')(z)
+    z = C.layers.Dense(10000, activation=C.ops.relu, name='fc2')(z)
+    z = C.layers.BatchNormalization(map_rank=1)(z)
+    z = C.layers.Dropout(dropout_rate=0.5, name='d3')(z)
 
     z = C.layers.Dense(num_classes, activation=None, name='prediction')(z)
 
-    residual_layers = z.find_by_name('residual_layers')
-    residual_params = residual_layers.parameters
-    dense_params = set(z.parameters) - set(residual_params)
-
-    print('Length of Residual Layers: {}'.format(len(residual_params)))
-    print('Length of Dense Layers: {}'.format(len(dense_params)))
-
-    return z, residual_params, dense_params
+    return z
 
 def create_resnet_network():
     ''' Create the Resnet Network '''
@@ -215,7 +204,7 @@ def create_resnet_network():
 
     # Scale the input, by subtracting it from the mean of Imagenet dataset.
     scaled_input = feature_var - C.constant(114)
-    z, residual_params, dense_params = resnet_model('ResNet18_ImageNet_CNTK.model', scaled_input)
+    z = resnet_model('ResNet152_ImageNet_CNTK.model', scaled_input)
 
     # loss and metric
     ce = C.cross_entropy_with_softmax(z, label_var)
@@ -228,41 +217,32 @@ def create_resnet_network():
         'label': label_var,
         'ce' : ce,
         'pe' : pe,
-        'output': z,
-        'residual_params': residual_params,
-        'dense_params': dense_params
+        'output': z
     }
 
 def create_trainer(network, epoch_size, num_quantization_bits, warm_up, progress_writers):
     ''' Create Trainer '''
     print('Creating the trainer.')
     # Differential Learning rate scheduler
-    # lr_schedule = C.learning_rate_schedule([0.01] * 10 + [0.001] * 20 + [0.0001] * 30, unit=C.UnitType.minibatch)
+    lr_schedule = C.learning_rate_schedule([2.5], unit=C.UnitType.minibatch)
     mm_schedule = C.momentum_schedule(0.9)
-    l2_reg_weight = 0.0001
+    l2_reg_weight = 0.001
 
     # Create the Adam learners
-    learner1 = C.adam(tuple(network['residual_params']),
-                         C.learning_parameter_schedule(0.0001),
-                         mm_schedule,
-                         l2_regularization_weight=l2_reg_weight,
-                         unit_gain=False)
-
-    learner2 = C.adam(tuple(network['dense_params']),
-                         C.learning_parameter_schedule(0.01),
-                         mm_schedule,
-                         l2_regularization_weight=l2_reg_weight,
-                         unit_gain=False)
+    learner = C.adam(network['output'].parameters,
+                     lr_schedule,
+                     mm_schedule,
+                     l2_regularization_weight=l2_reg_weight,
+                     unit_gain=False)
 
     # Compute the number of workers
     num_workers = C.distributed.Communicator.num_workers()
     print('Number of workers: {}'.format(num_workers))
     if num_workers > 1:
-        parameter_learner1 = C.train.distributed.data_parallel_distributed_learner(learner1, num_quantization_bits=num_quantization_bits)
-        parameter_learner2 = C.train.distributed.data_parallel_distributed_learner(learner2, num_quantization_bits=num_quantization_bits)
-        trainer = C.Trainer(network['output'], (network['ce'], network['pe']), [parameter_learner1, parameter_learner2], progress_writers)
+        parameter_learner = C.train.distributed.data_parallel_distributed_learner(learner, num_quantization_bits=num_quantization_bits)
+        trainer = C.Trainer(network['output'], (network['ce'], network['pe']), parameter_learner, progress_writers)
     else:
-        trainer = C.Trainer(network['output'], (network['ce'], network['pe']), [learner1, learner2], progress_writers)
+        trainer = C.Trainer(network['output'], (network['ce'], network['pe']), learner, progress_writers)
 
     return trainer
 
@@ -286,7 +266,7 @@ def train_model(network, trainer, train_source, test_source, validation_source, 
         return True
 
     # Create multiple checkpoints for your model, trainer and minibatches so that you can recover in case of failure.
-    checkpoint_config = CheckpointConfig(frequency=epoch_size * 5, filename=os.path.join(OUTPUTDIR, "resnet34_cp"), restore=restore)
+    checkpoint_config = CheckpointConfig(frequency=epoch_size * 5, filename=os.path.join(OUTPUTDIR, "resnet152_cp"), restore=restore)
     # test_config = TestConfig(minibatch_source=test_source, minibatch_size=minibatch_size)
     validation_config = CrossValidationConfig(
         minibatch_source=validation_source,
@@ -317,9 +297,9 @@ def train_model(network, trainer, train_source, test_source, validation_source, 
     if profiling:
         stop_profiler()
 
-def run(train_data, test_data, validation_data, minibatch_size=200, epoch_size=50000,
-    num_quantization_bits=32, warm_up=0, num_epochs=100, restore=True, log_to_file='logs.txt',
-    num_mbs_per_log=100, profiling=True):
+def run(train_data, test_data, validation_data, minibatch_size=25000, epoch_size=50000,
+    num_quantization_bits=32, warm_up=0, num_epochs=10, restore=True, log_to_file='logs.txt',
+    num_mbs_per_log=1, profiling=True):
     _cntk_py.set_computation_network_trace_level(0)
 
     # Create the network to be trained

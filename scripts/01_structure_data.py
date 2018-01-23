@@ -2,7 +2,6 @@ import os
 import pickle
 import shutil
 from PIL import Image
-from collections import defaultdict
 
 # Reduce the image size to (299, 299).
 size = (299, 299)
@@ -13,7 +12,7 @@ img_format = 'JPEG'
 split = 0.85
 train = 'train'
 test = 'validation'
-cat_subcat = defaultdict(set)
+subcat_cat = dict()
 
 def resize(img, size=size):
     '''
@@ -63,8 +62,8 @@ def arrange_data():
         if cat not in {train, test}:
             print(cat)
             for sub_cat in os.listdir(os.path.join(data_path, cat)):
-                cat_subcat[cat].add(sub_cat)
-                folder_name = '{}-{}'.format(cat, sub_cat)
+                subcat_cat[sub_cat] = cat
+                folder_name = '{}-{}'.format(cat, sub_cat.replace(' ', '_'))
 
                 # Create directories inside train and validation folders
                 os.makedirs(os.path.join(data_path, train, folder_name))
@@ -91,9 +90,9 @@ def arrange_data():
 
             shutil.rmtree(os.path.join(data_path, cat))
 
-    print('Saving the category-subcategory map in cat_subcat...')
-    with open('metadata/cat_subcat', 'wb') as f:
-        pickle.dump(cat_subcat, f)
+    print('Saving the subcategory-category map in subcat_cat...')
+    with open('metadata/subcat_cat', 'wb') as f:
+        pickle.dump(subcat_cat, f)
 
 if __name__ == '__main__':
     # Check if metadata exists or else create the directory

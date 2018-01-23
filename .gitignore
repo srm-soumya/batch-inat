@@ -60,6 +60,7 @@ TODO
 # Ignore bower components and npm modules
 node_modules/
 bower_components/
+metadata/
 
 # Windows shortcut files
 *.lnk

@@ -1,0 +1,4 @@
+output/logs.txtrank0
+CNTKCommandTrainInfo: train : 10
+CNTKCommandTrainInfo: CNTKNoMoreCommands_Total : 10
+CNTKCommandTrainBegin: train

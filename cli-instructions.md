@@ -1,4 +1,5 @@
-Make sure you have an Azure Account, if not you can signup for a free subscription. [https://azure.microsoft.com/en-us/free/?WT.mc_id=A261C142F]
+Make sure you have an Azure Account, if not you can signup for a free subscription.
+[https://azure.microsoft.com/en-us/free/?WT.mc_id=A261C142F]
 
 ### Install azure-cli [https://docs.microsoft.com/en-us/cli/azure/install-azure-cli?view=azure-cli-latest]
 
@@ -102,6 +103,8 @@ You can play around with number of nodes and the size of machine you wish to cre
 num of nodes * machine size => cost of your cluster.
 for eg: If you create 2 NC12 Machines, it might cost you 2 * $2 => $4 an hour
 
+You can also opt for ```low-priority VMs```, which are much cheaper compared to dedicated instances.
+
 While creating the cluster you can mount all your storage options like network file server, azure file share or blob storage.
 for eg: To mount an azure file share at $AZ_BATCHAI_MOUNT_ROOT/afs ```--afs-name <share-name> --afs-mount-path afs```
 $AZ_BATCHAI_MOUNT_ROOT is an environment variable that you can access.
@@ -160,12 +163,7 @@ We need to run two jobs in our cluster.
                 "pathPrefix": "$AZ_BATCHAI_MOUNT_ROOT/afs/inatdir/output",
                 "pathSuffix": "Metadata"
             }
-        ],
-        "containerSettings": {
-            "imageSourceRegistry": {
-                "image": "microsoft/cntk:2.1-gpu-python3.5-cuda8.0-cudnn6.0"
-            }
-        }
+        ]
     }
 }
 ```
@@ -207,6 +205,9 @@ az batchai job delete -n <job-name>
 {
     "properties": {
         "nodeCount": 2,
+        "jobPreparation": {
+            "commandLine": "rm /etc/nologin; rm /var/run/nologin; true"
+        },
         "cntkSettings": {
             "pythonScriptFilePath": "$AZ_BATCHAI_INPUT_SCRIPT/02_model.py",
             "commandLineArgs": "--train -d $AZ_BATCHAI_INPUT_DATA -dd $AZ_BATCHAI_INPUT_METADATA -m $AZ_BATCHAI_INPUT_MODEL -o $AZ_BATCHAI_OUTPUT_OUT",
@@ -237,12 +238,7 @@ az batchai job delete -n <job-name>
                 "pathPrefix": "$AZ_BATCHAI_MOUNT_ROOT/afs/inatdir/output",
                 "pathSuffix": "Models"
             }
-        ],
-        "containerSettings": {
-            "imageSourceRegistry": {
-                "image": "microsoft/cntk:2.1-gpu-python3.5-cuda8.0-cudnn6.0"
-            }
-        }
+        ]
     }
 }
 ```
@@ -293,6 +289,27 @@ az batchai job delete -n <job-name>
 ```sh
 az batchai cluster delete -n <cluster-name>
 ```
+
+### Outcome
+We are using Transfer Learning here with Resnet34 as the base layer with fine-tuning.
+
+- It took around 12 hours to run one pass through the dataset using 1 NC6 Instance i.e 1 K80 GPU.
+
+- We scaled it to 1 NC24 Instance i.e 4 K80 GPUs using CNTK's distributed learning feature and the training
+  time was reduced to 4 hours per epoch.
+
+- Finally we scaled it to 20 NC24 Instances i.e 80 K80 GPUs using BatchAI and the training time per epoch
+  was reduced to just 20 minutes. Then we replaced the base layer with Resnet152 to improve the accuracy further.
+
+- While increasing the number of clusters, make sure to increase the Minibatch Size of the data so that you utilize
+  the maximum capacity of your GPU VMs. In our case we increased the Minibatch Size from 256 to 25600, make sure you
+  adjust the learning rate accordingly.
+
+  For eg:
+  Minibatch Size | Learning Rate
+       100       |    0.01
+       100 * k   |    0.01 * k
+
 
 
 

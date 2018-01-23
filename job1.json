@@ -27,11 +27,6 @@
                 "pathPrefix": "$AZ_BATCHAI_MOUNT_ROOT/afs/inatdir/output",
                 "pathSuffix": "Metadata"
             }
-        ],
-        "containerSettings": {
-            "imageSourceRegistry": {
-                "image": "microsoft/cntk:2.1-gpu-python3.5-cuda8.0-cudnn6.0"
-            }
-        }
+        ]
     }
 }
